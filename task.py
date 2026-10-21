@@ -76,9 +76,9 @@ vel_n.interpolate(initial_condition)
 vel_n.x.scatter_forward()
 
 # Set up time scheme [s]
-dt = 0.0001
+dt = 0.001
 t = 0
-t_f = 0.1
+t_f = 1
 time = np.linspace(t,t_f,int((t_f-t)/dt)+1)
 
 beta = 0.25
@@ -115,6 +115,7 @@ pc.setType(PETSc.PC.Type.LU)
 vtk = io.VTKFile(domain.comm, "results2/elastodynamics.pvd", "w")
 
 d_tip = np.zeros(len(time))
+v_tip = np.zeros(len(time))
 
 while t < t_f:
     vtk.write_function(d, t)
@@ -141,7 +142,8 @@ while t < t_f:
     dn.x.array[:] = d.x.array
     vel_n.x.array[:] = vel.x.array
 
-    d_tip[i-1] = vel.x.array[len(d.x.array)-1]
+    d_tip[i-1] = d.x.array[len(d.x.array)-1]
+    v_tip[i-1] = vel.x.array[len(vel.x.array)-1]
 
     # # Predictors
     # dp = dn + dt*vel_n + ((dt**2)/2) * (1-2*beta)*an
@@ -163,3 +165,7 @@ vtk.close()
 fig, ax = plt.subplots(figsize=(10,10))
 ax.plot(time,d_tip)
 plt.savefig("tip_displacement")
+
+fig, ax = plt.subplots(figsize=(10,10))
+ax.plot(time,v_tip)
+plt.savefig("tip_velocity")
