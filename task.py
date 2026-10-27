@@ -1,4 +1,4 @@
-from dolfinx import mesh, fem, plot, io, default_scalar_type
+from dolfinx import mesh, fem, plot, io, default_scalar_type, geometry
 from dolfinx.fem.petsc import LinearProblem, assemble_matrix, assemble_vector, apply_lifting, set_bc
 from mpi4py import MPI
 from petsc4py import PETSc
@@ -38,6 +38,22 @@ u_D = np.array([0,0], dtype=default_scalar_type)
 dofs = fem.locate_dofs_topological(V,fdim,boundary_facets)
 bcs = fem.dirichletbc(u_D,dofs,V)
 
+# Track cell in which top point (L_0, H_0) of beam tip is contained
+bb_tree = geometry.bb_tree(domain, domain.topology.dim, padding=1e-10)
+point = np.array([[L_0, H_0, 0.0]], dtype=domain.geometry.x.dtype)
+potential_colliding_cells = geometry.compute_collisions_points(bb_tree, point)
+colliding_cells = geometry.compute_colliding_cells(domain, potential_colliding_cells, point)
+
+points_on_proc = []
+cells = []
+for i, point in enumerate(point):
+    if len(colliding_cells.links(i)) > 0:
+        points_on_proc.append(point)
+        cells.append(colliding_cells.links(i)[0])
+
+points_on_proc = np.array(points_on_proc, dtype=np.float64).reshape(-1, 3)
+cells = np.array(cells, dtype=np.int32)
+
 T = fem.Constant(domain,default_scalar_type((0,0)))
 ds = ufl.Measure("ds", domain=domain)
 f = fem.Constant(domain,default_scalar_type((0,0)))
@@ -53,6 +69,7 @@ vel_n = fem.Function(V)
 vel = fem.Function(V)
 an = fem.Function(V)
 a = fem.Function(V)
+dp = fem.Function(V) # predictor
 a.name = "acceleration"
 d.name = "displacement"
 
@@ -75,15 +92,6 @@ def initial_condition(x):
 vel_n.interpolate(initial_condition)
 vel_n.x.scatter_forward()
 
-# Set up time scheme [s]
-dt = 0.001
-t = 0
-t_f = 1
-time = np.linspace(t,t_f,int((t_f-t)/dt)+1)
-
-beta = 0.25
-gamma = 0.5
-
 # Weak form
 def epsilon(u):
     return ufl.sym(ufl.grad(u))
@@ -97,7 +105,14 @@ def mass(u,v):
 def stiffness(u,v):
     return ufl.inner(sigma(u),epsilon(v)) * ufl.dx
 
-dp = dn + dt*vel_n + ((dt**2)/2) * (1-2*beta)*an
+# Set up time scheme [s]
+dt = 0.001
+t = 0
+t_f = 1
+time = np.linspace(t,t_f,int((t_f-t)/dt)+1)
+
+beta = 0.25
+gamma = 0.5
 
 a_form = fem.form(mass(u,v) + beta*dt**2 * stiffness(u,v))
 L_form = fem.form(ufl.dot(f,v) * ufl.dx + ufl.dot(T,v) * ufl.ds - stiffness(dp,v))
@@ -116,11 +131,18 @@ vtk = io.VTKFile(domain.comm, "results2/elastodynamics.pvd", "w")
 
 d_tip = np.zeros(len(time))
 v_tip = np.zeros(len(time))
+ke = np.zeros(len(time))
+pe = np.zeros(len(time))
 
-while t < t_f:
+# Energy forms
+ke_form = fem.form(0.5 * mass(vel,vel))
+pe_form = fem.form(0.5 * stiffness(d,d))
+
+for t in range(0,len(time)):
     vtk.write_function(d, t)
-    t += dt
-    i = int((t + dt)/dt)
+
+    dp.x.array[:] = dn.x.array + dt*vel_n.x.array + ((dt**2)/2) * (1-2*beta)*an.x.array
+    dp.x.scatter_forward()
 
     with b.localForm() as loc_b:
         loc_b.set(0)
@@ -138,20 +160,17 @@ while t < t_f:
     d.x.scatter_forward()
     vel.x.scatter_forward()
 
+    ke[t] = fem.assemble_scalar(ke_form)
+    pe[t] = fem.assemble_scalar(pe_form)
+    
+    tip_d = d.eval(points_on_proc, cells)
+    tip_v = vel.eval(points_on_proc, cells)
+    d_tip[t] = tip_d[1] # vertical displacement
+    v_tip[t] = tip_v[1] # vertical velocity
+
     an.x.array[:] = a.x.array
     dn.x.array[:] = d.x.array
     vel_n.x.array[:] = vel.x.array
-
-    d_tip[i-1] = d.x.array[len(d.x.array)-1]
-    v_tip[i-1] = vel.x.array[len(vel.x.array)-1]
-
-    # # Predictors
-    # dp = dn + dt*vel_n + ((dt**2)/2) * (1-2*beta)*an
-    # vel_p = vel_n + (1-gamma)*dt*an
-
-    # # Correctors
-    # dc = dp + beta*dt**2*a
-    # vel_c = vel_p + gamma*dt*a
 
 A.destroy()
 b.destroy()
@@ -164,8 +183,23 @@ vtk.close()
 
 fig, ax = plt.subplots(figsize=(10,10))
 ax.plot(time,d_tip)
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Displacement (m)")
+ax.set_title("Tip Displacement at (L_0,H_0) vs. Time")
 plt.savefig("tip_displacement")
 
 fig, ax = plt.subplots(figsize=(10,10))
 ax.plot(time,v_tip)
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Velocity (m/s)")
+ax.set_title("Tip Velocity at (L_0,H_0) vs. Time")
 plt.savefig("tip_velocity")
+
+fig, ax = plt.subplots(figsize=(10,10))
+ax.plot(time,ke,c='k',label="KE")
+ax.plot(time,pe,c='r',label="PE")
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Energy (J)")
+ax.set_title("Energy vs. Time")
+ax.legend()
+plt.savefig("energy")
