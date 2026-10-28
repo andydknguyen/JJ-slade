@@ -80,11 +80,11 @@ def f_(x):
     c1 = k_w * L_0
     c2 = k_w * x
 
-    return ((np.cos(c1) + np.cosh(c1))*(np.cosh(c2) - np.cos(c2))) + ((np.sin(c1) + np.sinh(c1))*(np.sinh(c2) - np.sin(c2)))
+    return ((np.cos(c1) + np.cosh(c1))*(np.cosh(c2) - np.cos(c2))) + ((np.sin(c1) - np.sinh(c1))*(np.sinh(c2) - np.sin(c2)))
 
 def initial_condition(x):
     c1 = k_w * L_0
-    bottom = ((np.cos(c1) + np.cosh(c1))*(np.cosh(c1) - np.cos(c1))) + ((np.sin(c1) + np.sinh(c1))*(np.sinh(c1) - np.sin(c1)))
+    bottom = ((np.cos(c1) + np.cosh(c1))*(np.cosh(c1) - np.cos(c1))) + ((np.sin(c1) - np.sinh(c1))*(np.sinh(c1) - np.sin(c1)))
     v = 0.01 * c_s * (f_(x[0]) / bottom)
 
     return np.vstack((np.zeros_like(v),v), dtype=default_scalar_type)
